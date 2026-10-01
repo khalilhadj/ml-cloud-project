@@ -1,0 +1,25 @@
+random_seed: 42
+
+paths:
+  raw_data: data/raw
+  processed_data: data/processed
+  models_dir: models
+  database: data/alerts.db
+
+features:
+  window_seconds: 60
+
+model:
+  n_estimators: 200
+  contamination: auto
+
+alerts:
+  threshold: 0.60
+  severity:
+    low: 0.60
+    medium: 0.70
+    high: 0.80
+  dedup_window_minutes: 10
+
+retrain:
+  min_feedback: 20
