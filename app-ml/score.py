@@ -1,4 +1,4 @@
-"""Chargement du dernier modèle versionné et calcul des scores d'anomalie."""
+"""Chargement de la version active du modèle et calcul des scores d'anomalie."""
 import json
 import re
 from pathlib import Path
@@ -25,11 +25,21 @@ def latest_version_dir(models_dir):
     return models_dir / f"v{max(nums):03d}"
 
 
+def active_version_dir(models_dir):
+    """Version désignée par models/active.txt ; à défaut, la plus récente."""
+    pointer = models_dir / "active.txt"
+    if pointer.exists():
+        d = models_dir / pointer.read_text(encoding="utf-8").strip()
+        if d.is_dir() and (d / "model.joblib").exists():
+            return d
+    return latest_version_dir(models_dir)
+
+
 def load_version(cfg=None, version=None):
-    """Retourne (model, preprocessor, metadata, dossier). version=None -> la plus récente."""
+    """Retourne (model, preprocessor, metadata, dossier). version=None -> la version active."""
     cfg = cfg or load_config()
     models_dir = ROOT / cfg["paths"]["models"]
-    vdir = models_dir / version if version else latest_version_dir(models_dir)
+    vdir = models_dir / version if version else active_version_dir(models_dir)
     model = joblib.load(vdir / "model.joblib")
     pre = joblib.load(vdir / "preprocessor.joblib")
     with open(vdir / "metadata.json", encoding="utf-8") as f:
