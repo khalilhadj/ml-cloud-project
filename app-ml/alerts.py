@@ -50,6 +50,54 @@ def generate_alerts(X, scores, cfg, names, k=3):
     return out
 
 
+SEVERITY_RANK = {"faible": 0, "moyenne": 1, "élevée": 2}
+
+
+def attach_context(alerts, src_ips=None, timestamps=None):
+    """Ajoute src_ip et timestamp à chaque alerte (indexés par alert['index'])."""
+    for a in alerts:
+        if src_ips is not None:
+            a["src_ip"] = str(src_ips[a["index"]])
+        if timestamps is not None:
+            a["timestamp"] = timestamps[a["index"]]
+    return alerts
+
+
+def _merge(group):
+    rep = dict(max(group, key=lambda a: a["score"]))
+    rep["count"] = len(group)
+    rep["indexes"] = [a["index"] for a in group]
+    rep["first_seen"] = min(a["timestamp"] for a in group)
+    rep["last_seen"] = max(a["timestamp"] for a in group)
+    rep["severity"] = max((a["severity"] for a in group), key=SEVERITY_RANK.get)
+    return rep
+
+
+def group_by_ip(alerts, window_minutes):
+    """FR-15 : regroupe les alertes d'une même IP séparées de <= window_minutes."""
+    from datetime import timedelta
+    window = timedelta(minutes=window_minutes)
+    out, by_ip = [], {}
+    for a in alerts:
+        if not a.get("src_ip") or a.get("timestamp") is None:
+            single = dict(a)
+            single.update(count=1, indexes=[a["index"]])
+            out.append(single)
+        else:
+            by_ip.setdefault(a["src_ip"], []).append(a)
+    for items in by_ip.values():
+        items.sort(key=lambda a: a["timestamp"])
+        cur = [items[0]]
+        for a in items[1:]:
+            if a["timestamp"] - cur[-1]["timestamp"] <= window:
+                cur.append(a)
+            else:
+                out.append(_merge(cur))
+                cur = [a]
+        out.append(_merge(cur))
+    return sorted(out, key=lambda a: a["score"], reverse=True)
+
+
 if __name__ == "__main__":
     cfg = load_config()
     model, pre, meta, vdir = load_version(cfg)
