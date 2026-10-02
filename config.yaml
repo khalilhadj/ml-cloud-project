@@ -12,9 +12,10 @@ features:
 model:
   n_estimators: 200
   contamination: auto
+  max_samples: 1024
 
 detection:
-  threshold: null          # réglé à l'étape 5 sur le jeu de validation
+  threshold: 0.481472          # réglé à l'étape 5 sur le jeu de validation
   severity:
     low: 0.60
     medium: 0.70
