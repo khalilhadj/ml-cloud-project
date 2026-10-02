@@ -17,9 +17,9 @@ model:
 detection:
   threshold: 0.481472          # réglé à l'étape 5 sur le jeu de validation
   severity:
-    low: 0.60
-    medium: 0.70
-    high: 0.80
+    low: 0.481472
+    medium: 0.538236
+    high: 0.595000
   dedup_window_minutes: 10
 
 retrain:
