@@ -24,6 +24,7 @@ def load_settings():
         "password": g("SMTP_PASSWORD", ""),
         "to": g("ALERT_EMAIL_TO", "").strip(),
         "slack": g("SLACK_WEBHOOK_URL", "").strip(),
+        "sns": g("SNS_TOPIC_ARN", "").strip(),
     }
 
 
@@ -63,7 +64,14 @@ def _send_slack(url, subject, body):
     urllib.request.urlopen(req, timeout=15).read()
 
 
-def notify(alerts, model_version, settings=None, top=10):
+def _send_sns(topic_arn, subject, body, client=None):
+    if client is None:
+        import boto3
+        client = boto3.client("sns", region_name=os.environ.get("AWS_REGION", "us-east-1"))
+    client.publish(TopicArn=topic_arn, Subject=subject[:100], Message=body)
+
+
+def notify(alerts, model_version, settings=None, top=10, sns_client=None):
     """Retourne 'email', 'slack', 'email+slack', 'simulation', 'aucune_alerte' ou 'erreur'."""
     if not alerts:
         return "aucune_alerte"
@@ -77,6 +85,9 @@ def notify(alerts, model_version, settings=None, top=10):
         if s["slack"]:
             _send_slack(s["slack"], subject, body)
             sent.append("slack")
+        if s.get("sns"):
+            _send_sns(s["sns"], subject, body, sns_client)
+            sent.append("sns")
     except Exception:
         logger.exception("Échec de l'envoi de la notification (le pipeline continue)")
         return "erreur"

@@ -133,8 +133,30 @@ def load_file(path):
     return load_nsl_kdd(path)
 
 
-def load_folder(folder):
-    """FR-01 : charge tous les fichiers d'un dossier. Un fichier en erreur n'arrête pas les autres."""
+def load_s3_prefix(url, client=None):
+    """FR-01 (cloud) : charge les fichiers d'un préfixe S3 (s3://bucket/prefix/)."""
+    import tempfile
+    from storage import download, list_keys, parse_s3_url
+    bucket, prefix = parse_s3_url(url)
+    results = {}
+    with tempfile.TemporaryDirectory() as tmp:
+        for key in list_keys(prefix, bucket=bucket, client=client):
+            name = key.rsplit("/", 1)[-1]
+            if not name or name.startswith("."):
+                continue
+            try:
+                local = Path(tmp) / name
+                download(key, local, bucket=bucket, client=client)
+                results[name] = load_file(local)
+            except Exception:
+                logger.exception("Échec du chargement de s3://%s/%s", bucket, key)
+    return results
+
+
+def load_folder(folder, client=None):
+    """FR-01 : charge tous les fichiers d'un dossier local ou d'un préfixe s3://. Un fichier en erreur n'arrête pas les autres."""
+    if str(folder).startswith("s3://"):
+        return load_s3_prefix(str(folder), client=client)
     results = {}
     for p in sorted(Path(folder).glob("*")):
         if p.name.startswith(".") or not p.is_file():
