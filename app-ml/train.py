@@ -89,6 +89,8 @@ if __name__ == "__main__":
     model = train_model(X_train, cfg)
 
     out = save_version(model, pre, cfg, X_train)
+    from models_sync import safe_push
+    print("Synchronisation S3 :", safe_push(out))
     s_train = anomaly_score(model, X_train)
     s_val = anomaly_score(model, data["X_val"])
     print("Modèle sauvegardé dans :", out)

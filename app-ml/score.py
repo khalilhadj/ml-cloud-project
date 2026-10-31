@@ -35,10 +35,29 @@ def active_version_dir(models_dir):
     return latest_version_dir(models_dir)
 
 
+def _ensure_local(models_dir, version=None, client=None, bucket=None):
+    """Si le modèle voulu est absent en local, tente de le récupérer depuis S3 (ne bloque jamais)."""
+    if version:
+        have = (models_dir / version / "model.joblib").exists()
+    else:
+        have = models_dir.is_dir() and any(
+            (p / "model.joblib").exists() for p in models_dir.glob("v*") if p.is_dir())
+    if have:
+        return False
+    try:
+        import models_sync
+        return bool(models_sync.pull_missing(models_dir, bucket=bucket, client=client))
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("Récupération des modèles depuis S3 impossible")
+        return False
+
+
 def load_version(cfg=None, version=None):
     """Retourne (model, preprocessor, metadata, dossier). version=None -> la version active."""
     cfg = cfg or load_config()
     models_dir = ROOT / cfg["paths"]["models"]
+    _ensure_local(models_dir, version)
     vdir = models_dir / version if version else active_version_dir(models_dir)
     model = joblib.load(vdir / "model.joblib")
     pre = joblib.load(vdir / "preprocessor.joblib")

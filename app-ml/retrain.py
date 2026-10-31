@@ -74,6 +74,10 @@ def run_cycle(cfg=None, db_path=None, apply_config=True):
             med, high = calibrate_severity(score_matrix(new_model, X_val), new_m["threshold"])
             write_severity(med, high, new_m["threshold"])
 
+    if apply_config:   # chemin réel uniquement : les tests n'envoient rien sur S3
+        from models_sync import safe_push
+        logger.info("Synchronisation S3 : %s", safe_push(new_dir, with_active=promoted))
+
     return {
         "status": "promoted" if promoted else "rejected", "promoted": promoted,
         "old_version": old_meta["version"], "new_version": new_dir.name,
