@@ -7,6 +7,22 @@ import logic
 
 st.set_page_config(page_title="Détection d'anomalies", page_icon="🛡️", layout="wide")
 
+import hmac
+import os
+
+_pwd = os.environ.get("DASHBOARD_PASSWORD", "")
+if _pwd:
+    if not st.session_state.get("auth"):
+        st.title("🛡️ Accès réservé")
+        entered = st.text_input("Mot de passe", type="password")
+        if entered:
+            if hmac.compare_digest(entered.encode(), _pwd.encode()):
+                st.session_state["auth"] = True
+                st.rerun()
+            else:
+                st.error("Mot de passe incorrect.")
+        st.stop()
+
 # ------------------------------------------------------------------ barre latérale
 st.sidebar.header("Analyste")
 analyst = st.sidebar.text_input("Nom", value="", placeholder="ex. khalil")
