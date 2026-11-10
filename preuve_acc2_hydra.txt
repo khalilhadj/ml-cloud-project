@@ -1,0 +1,4 @@
+Tentatives SSH lues : 27 | rejetées : 0
+       src_ip              minute  n_attempts  n_failed  n_accepted  n_invalid_user  n_distinct_users  fail_ratio
+172.31.25.235 2026-11-10 19:30:00          20        12           0               8                 3    0.600000
+172.31.25.235 2026-11-10 15:24:00           7         6           1               0                 1    0.857143
