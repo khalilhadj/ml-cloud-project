@@ -1,0 +1,219 @@
+=== check_all ===
+  [OK] aucun dossier de version vide
+  [OK] v001/model.joblib
+  [OK] v001/preprocessor.joblib
+  [OK] v001/metadata.json
+  [OK] metadata : clé 'version'
+  [OK] metadata : clé 'created_at'
+  [OK] metadata : clé 'hyperparameters'
+  [OK] metadata : clé 'train_samples'
+  [OK] metadata : clé 'n_features'
+  [OK] metadata : clé 'metrics'
+  [OK] metadata.version = nom du dossier  ->  v001 vs v001
+  [OK] metadata.n_features = 77
+  [OK] score validation > score train  ->  0.4645 > 0.3605
+  [OK] AUC validation > 0.80  ->  0.986
+  [OK] AUC test > 0.75  ->  0.957
+  [OK] NFR-01 : 10 000 événements en < 10 s  ->  0.11 s
+  [OK] entraînement reproductible (graine 42)
+== 5. Git ==
+  [OK] .env non suivi par Git
+  [OK] .env.example suivi
+  [OK] data brutes non suivies
+  [OK] modèles non suivis
+  [OK] au moins un commit
+
+Résultat : 46/46 OK
+exit code: 0
+=== check_dataset ===
+Valeurs manquantes : 0
+Normal : 67343 (53.5%)
+Attaques : 58630 (46.5%)
+Types d'attaques distincts : 22
+Top 5 labels :
+label
+normal       67343
+neptune      41214
+satan         3633
+ipsweep       3599
+portsweep     2931
+
+=== KDDTest+.txt ===
+Lignes, colonnes : (22544, 43)
+Valeurs manquantes : 0
+Normal : 9711 (43.1%)
+Attaques : 12833 (56.9%)
+Types d'attaques distincts : 37
+Top 5 labels :
+label
+normal          9711
+neptune         4657
+guess_passwd    1231
+mscan            996
+warezmaster      944
+exit code: 0
+=== test_storage ===
+== 3. Ingestion depuis S3 ==
+  [OK] 2 fichiers chargés (.gitkeep ignoré)  ->  ['KDD_sample.txt', 'auth.log']
+  [OK] NSL-KDD : 2 lignes x 43 colonnes  ->  (2, 43)
+  [OK] auth.log : 2 échecs SSH
+  [OK] un fichier illisible n'arrête pas les autres
+  [OK] mode local inchangé
+== 4. SNS ==
+  [OK] SNS seul -> 'sns'  ->  sns
+  [OK] message publié sur le bon topic
+  [OK] sujet <= 100 caractères
+  [OK] erreur SNS -> ne plante pas
+--- MODE SIMULATION (SMTP non configuré) ---
+Sujet : [Détection d'anomalies] 1 alerte(s) - 1 élevée(s)
+
+Modèle : v001
+Alertes : 1 (élevée 1, moyenne 0, faible 0)
+
+Les 1 plus graves :
+- élevée  score=0.700 : count (5.0 σ)
+
+Qualifier ces alertes dans le tableau de bord (vrai / faux positif).
+--------------------------------------------
+  [OK] sans SNS ni SMTP -> simulation
+
+Résultat : 18/18 OK
+exit code: 0
+=== test_grouping ===
+  [OK] 54 événements SSH lus  ->  54
+  [OK] fenêtre de 10 min lue depuis config.yaml
+  [OK] 55 alertes -> 6 groupes  ->  6
+  [OK] force brute : 50 alertes regroupées en 1
+  [OK] représentante = score maximal du groupe
+  [OK] durée du groupe = 98 s
+  [OK] sévérité = la plus haute du groupe  ->  élevée
+  [OK] indexes conservés
+  [OK] même IP 25 min plus tard : groupe séparé
+  [OK] 10.0.0.9 espacée de 30 min : 2 groupes
+  [OK] IP isolée conservée
+  [OK] alerte sans IP non regroupée
+  [OK] tri par score décroissant
+  [OK] aucune alerte perdue  ->  55
+
+Résultat : 14/14 OK
+exit code: 0
+=== test_models_sync ===
+== 1. Envoi ==
+  [OK] 3 fichiers envoyés, junk.txt exclu
+  [OK] contenu identique
+  [OK] active.txt envoyé
+  [OK] pas de active.txt -> None
+== 2. Récupération ==
+  [OK] 4 fichiers récupérés (3 du modèle + active.txt)  ->  ['active.txt', 'v001/metadata.json', 'v001/model.joblib', 'v001/preprocessor.joblib']
+  [OK] contenu identique en local
+  [OK] clés piégées ignorées
+  [OK] seconde récupération : rien à faire
+  [OK] un fichier local n'est jamais écrasé
+  [OK] S3 non configuré -> récupération vide
+== 3. Envoi sécurisé ==
+  [OK] S3 non configuré -> 'disabled'
+  [OK] envoi avec active.txt -> 'ok'
+  [OK] sans active.txt quand non promu
+  [OK] panne S3 -> 'error' sans exception
+== 4. Récupération automatique dans score.py ==
+  [OK] dossier vide -> modèle récupéré depuis S3
+  [OK] modèle présent -> aucun appel S3
+  [OK] version demandée absente -> récupérée
+  [OK] panne S3 -> False sans exception
+
+Résultat : 18/18 OK
+exit code: 0
+=== test_retrain ===
+  [OK] F1 meilleur et FPR plus bas -> promu
+  [OK] F1 égal et FPR plus bas -> promu
+  [OK] F1 égal et FPR égal -> refusé
+  [OK] F1 plus bas -> refusé
+  [OK] F1 meilleur mais FPR plus haut -> refusé
+== 2. Pointeur de version active ==
+  [OK] sans pointeur -> dernière version
+  [OK] pointeur v001 -> v001 (même si v003 existe)
+  [OK] pointeur vers version absente -> repli sur v003
+== 3. Cycle complet (base et modèles temporaires) ==
+  [OK] 19 faux positifs (< minimum) -> cycle ignoré  ->  skipped
+  [OK] aucun modèle créé quand ignoré
+  (info) F1 0.9439 -> 0.9381 | FPR 0.0215 -> 0.0292 | rejected
+  [OK] 30 faux positifs utilisés (le vrai positif est exclu)  ->  30
+  [OK] statut = promu ou rejeté  ->  rejected
+  [OK] nouvelle version sauvegardée  ->  v002
+  [OK] metadata : version parente enregistrée
+  [OK] entraînement = données normales + faux positifs  ->  53904
+  [OK] décision conforme à la règle FR-20 et tracée
+  [OK] pointeur active.txt cohérent avec la décision  ->  v001
+  [OK] faux positifs marqués utilisés seulement si promu  ->  30 restants
+  [OK] vrai dossier models/ inchangé
+  [OK] config.yaml inchangé
+
+Résultat : 20/20 OK
+exit code: 0
+=== test_scheduler ===
+== 1. Intervalles ==
+  [OK] weekly = 604800 s
+  [OK] daily = 86400 s
+  [OK] hourly = 3600 s
+  [OK] planification inconnue rejetée
+== 2. Un cycle ==
+  [OK] cycle ignoré : statut et compteur conservés
+  [OK] 1 ligne JSON dans l'historique (dossier créé)
+  [OK] erreur : pas d'exception, status = error
+  [OK] message d'erreur conservé
+  [OK] l'erreur est aussi dans l'historique
+  [OK] cycle promu : versions enregistrées
+== 3. Boucle ==
+  [OK] 3 cycles exécutés
+  [OK] attente de 100 s avant chaque cycle  ->  [100, 100, 100]
+  [OK] le job est appelé 3 fois
+  [OK] la boucle continue après une erreur
+== 4. Configuration et vrai cycle ==
+  [OK] config.yaml : retrain.schedule = weekly  ->  weekly
+  [OK] intervalle réel = 7 jours
+  [OK] vrai run_cycle sur base vide -> skipped, 0 feedback  ->  skipped, 0
+
+Résultat : 17/17 OK
+exit code: 0
+=== test_dashboard ===
+  [OK] base vide : aucune ligne
+  [OK] base vide : statistiques à zéro
+  [OK] démo : alertes créées  ->  28 alertes / 40
+  [OK] démo : majorité de vraies attaques  ->  27/28
+  [OK] démo reproductible (même graine)
+  [OK] toutes les alertes sont en attente
+  [OK] triées par score décroissant
+  [OK] variables déviantes affichées
+  [OK] filtre par sévérité
+  [OK] métriques après feedback  ->  {'total': 28, 'en_attente': 26, 'vrai_positif': 1, 'faux_positif': 1, 'taux_faux_positifs': 0.5, 'precision_mesuree': 0.5}
+  [OK] alertes qualifiées retirées de la liste
+  [OK] historique des scores complet
+  [OK] faux positifs prêts : 1 sur le minimum de la config  ->  1/20
+
+Résultat : 13/13 OK
+exit code: 0
+=== test_dashboard2 ===
+  [OK] sévérités à zéro sur base vide
+  [OK] démo : au moins 3 alertes  ->  40
+  [OK] somme des sévérités = nombre d'alertes
+  [OK] toutes en attente au départ
+  [OK] all_alerts retourne toutes les alertes
+  [OK] filtre par statut
+  [OK] qualification en masse : 3 traitées
+  [OK] statuts mis à jour
+  [OK] filtre faux_positif : 3 lignes
+  [OK] fiche : variables, vecteur et décision
+  [OK] fiche d'une alerte non qualifiée : pas de feedback
+  [OK] fiche d'une alerte inconnue : None
+  [OK] analyste vide rejeté
+  [OK] liste vide : 0 traitée
+  [OK] journal des décisions : 3 lignes
+  [OK] modèle actif : version, seuil, versions  ->  v001
+  [OK] historique absent : liste vide
+  [OK] historique : le plus récent d'abord
+  [OK] cycle sur base vide : skipped  ->  skipped
+  [OK] export CSV : en-tête + une ligne par alerte
+  [OK] remise à zéro
+
+Résultat : 21/21 OK
+exit code: 0

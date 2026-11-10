@@ -1,0 +1,44 @@
+{
+  "version": "v001",
+  "created_at": "2026-10-31T09:08:45+00:00",
+  "algorithm": "IsolationForest",
+  "hyperparameters": {
+    "n_estimators": 200,
+    "contamination": "auto",
+    "max_samples": 1024,
+    "random_state": 42
+  },
+  "train_samples": 53874,
+  "n_features": 77,
+  "sklearn_version": "1.6.1",
+  "score_convention": "score = -score_samples ; plus élevé = plus anormal",
+  "metrics": {
+    "threshold": 0.481472,
+    "validation": {
+      "f1": 0.9439,
+      "precision": 0.9737,
+      "recall": 0.9159,
+      "false_positive_rate": 0.0215,
+      "auc": 0.9858,
+      "confusion": {
+        "tn": 13179,
+        "fp": 290,
+        "fn": 986,
+        "tp": 10740
+      }
+    },
+    "test": {
+      "f1": 0.793,
+      "precision": 0.9386,
+      "recall": 0.6864,
+      "false_positive_rate": 0.0593,
+      "auc": 0.9567,
+      "confusion": {
+        "tn": 9135,
+        "fp": 576,
+        "fn": 4024,
+        "tp": 8809
+      }
+    }
+  }
+}

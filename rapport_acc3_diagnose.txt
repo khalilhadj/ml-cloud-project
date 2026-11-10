@@ -1,0 +1,29 @@
+Modèle v001, seuil 0.481472
+
+Rappel par famille :
+         mean   sum  count
+family                    
+DoS     0.827  6173   7460
+Probe   0.978  2367   2421
+R2L     0.085   246   2885
+U2R     0.343    23     67
+
+Rappel attaques connues / inconnues :
+        mean   sum  count
+known                    
+False  0.647  2425   3750
+True   0.703  6384   9083
+
+Les 10 attaques les plus nombreuses et leur rappel :
+               mean   sum  count
+label                           
+neptune       1.000  4657   4657
+guess_passwd  0.025    31   1231
+mscan         0.966   962    996
+warezmaster   0.099    93    944
+apache2       0.996   734    737
+satan         0.996   732    735
+processtable  0.428   293    685
+smurf         0.638   424    665
+back          0.081    29    359
+snmpguess     0.000     0    331
