@@ -172,3 +172,47 @@ if __name__ == "__main__":
 
     sort_col = "n_dports" if kind == "ufw" else "n_attempts"
     print(feats.sort_values(sort_col, ascending=False).to_string(index=False))
+
+
+# --- Détecteur SSH (modèle ML, fenêtre de 10 s) --------------------------
+# Agrège les événements auth.log par IP et par fenêtre fixe de 10 secondes.
+# Une version antérieure de cette fonction existait mais n'a jamais été
+# committée ; elle produisait un nombre de fenêtres différent, non
+# reproductible. Cette version est la seule considérée comme valide, et
+# le nombre de fenêtres qu'elle produit dépend uniquement du fichier
+# source utilisé.
+
+SSH_WINDOW = 10  # secondes
+FEATURE_NAMES = ["n_events", "n_failed", "fail_ratio", "n_distinct_users",
+                  "n_distinct_ports", "events_per_second"]
+
+
+def build_features(events):
+    """events : DataFrame avec colonnes timestamp, src_ip, user, port, failed
+    (sortie de ingestion.load_auth_log). Retourne (keys, X) : keys a les
+    colonnes src_ip et window_start ; X est un tableau numpy (n_fenetres, 6)."""
+    import numpy as np
+    if events.empty:
+        return pd.DataFrame(columns=["src_ip", "window_start"]), np.empty((0, 6))
+    df = events.copy()
+    epoch = df["timestamp"].astype("int64") // 10**9
+    df["window_start"] = pd.to_datetime((epoch // SSH_WINDOW) * SSH_WINDOW, unit="s")
+
+    rows = []
+    for (ip, w), g in df.groupby(["src_ip", "window_start"]):
+        n_events = len(g)
+        n_failed = int(g["failed"].sum())
+        rows.append({
+            "src_ip": ip,
+            "window_start": w,
+            "n_events": n_events,
+            "n_failed": n_failed,
+            "fail_ratio": n_failed / n_events,
+            "n_distinct_users": g["user"].nunique(),
+            "n_distinct_ports": g["port"].nunique(),
+            "events_per_second": n_events / SSH_WINDOW,
+        })
+    out = pd.DataFrame(rows).sort_values(["src_ip", "window_start"]).reset_index(drop=True)
+    keys = out[["src_ip", "window_start"]]
+    X = out[FEATURE_NAMES].to_numpy(dtype=float)
+    return keys, X
