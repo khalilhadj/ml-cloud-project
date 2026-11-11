@@ -1,66 +1,65 @@
-"""Détecteur SSH en continu (FR-23, ACC-2) : lit auth.log, agrège par IP et fenêtre de 10 s,
-score avec le modèle SSH, écrit les alertes dans une base SQLite dédiée.
-Usage : python app-ml/detector.py --once [--since "2026-11-10 01:45:00"]
-        python app-ml/detector.py --follow            (boucle toutes les 5 s)"""
+"""Détecteur de force brute SSH (FR-23, ACC-2) : règle de seuil par IP et par minute.
+Usage : python app-ml/detector.py --once --log <auth.log> [--min-failed 5] [--since "2026-11-10 19:00:00"] [--notify]
+        python app-ml/detector.py --follow [--notify]      (boucle toutes les 5 s)"""
 import argparse
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
 
-import joblib
-import numpy as np
 import pandas as pd
-import json
 
 sys.path.append(str(Path(__file__).resolve().parent))
 import db  # noqa: E402
-from features_logs import FEATURE_NAMES, build_features  # noqa: E402
-from ingestion import load_auth_log  # noqa: E402
+from features_logs import build_auth_features, load_auth_attempts  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-MODEL_DIR = ROOT / "models" / "ssh" / "v002"
-DB_SSH = ROOT / "data" / "alerts_ssh.db"      # base séparée : 6 variables, pas les 77 de NSL-KDD
-NORMAL_LOG = ROOT / "data" / "raw" / "auth_normal.log"
+DB_SSH = ROOT / "data" / "alerts_ssh.db"   # base séparée : ne pas mélanger avec les 77 variables NSL-KDD
+RULE_VERSION = "ssh-rule-v1"
 
 
-def load_detector():
-    model = joblib.load(MODEL_DIR / "model.joblib")
-    meta = json.loads((MODEL_DIR / "metadata.json").read_text(encoding="utf-8"))
-    _, Xn = build_features(load_auth_log(str(NORMAL_LOG)))
-    return model, meta, Xn.mean(axis=0), Xn.std(axis=0) + 1e-6
+def severity(r):
+    if r["n_accepted"] > 0:
+        return "élevée"            # accès obtenu après échecs : compromission probable
+    if r["n_distinct_users"] >= 2:
+        return "élevée" if r["n_failed"] >= 20 else "moyenne"
+    return "faible"
 
 
-def severity(score, thr):
-    r = score / thr
-    return "high" if r >= 1.5 else "medium" if r >= 1.2 else "low"
-
-
-def scan(log_path, model, meta, mu, sd, seen, since=None):
-    thr = meta["threshold"]
-    keys, X = build_features(load_auth_log(log_path))
-    if len(X) == 0:
+def scan(log_path, min_failed, seen, since=None, notify_on=False, db_path=DB_SSH):
+    df, _ = load_auth_attempts(log_path)
+    feats = build_auth_features(df)
+    if feats.empty:
         return 0
-    scores = -model.score_samples(X)
-    alerts, idx = [], []
-    for i in range(len(X)):
-        key = (keys.iloc[i]["src_ip"], str(keys.iloc[i]["window_start"]))
-        if key in seen or (since is not None and keys.iloc[i]["window_start"] < since):
+    feats = feats.reset_index(drop=True)
+    X = feats[["n_failed", "n_accepted", "n_distinct_users"]].to_numpy(dtype=float)
+    ips = feats["src_ip"].astype(str).tolist()
+    alerts = []
+    for i, r in feats.iterrows():
+        key = (r["src_ip"], str(r["minute"]))
+        if r["n_failed"] < min_failed or key in seen:
             continue
-        if scores[i] >= thr:
-            z = (X[i] - mu) / sd
-            top = [{"feature": FEATURE_NAMES[j], "value": round(float(X[i][j]), 3), "z": round(float(z[j]), 1)}
-                   for j in np.argsort(-np.abs(z))[:3]]
-            alerts.append({"index": i, "score": float(scores[i]),
-                           "severity": severity(scores[i], thr), "top_features": top})
-            seen.add(key)
-    if alerts:
-        ips = keys["src_ip"].tolist()
-        db.insert_alerts(alerts, X, meta["version"], src_ips=ips, path=DB_SSH)
-        for a in alerts:
-            k = keys.iloc[a["index"]]
-            print(f"ALERTE {a['severity'].upper():6} ip={k['src_ip']} fenêtre={k['window_start']} "
-                  f"score={a['score']:.3f} (seuil {thr:.3f}) top={a['top_features'][0]['feature']}")
+        if since is not None and pd.Timestamp(r["minute"]) < since:
+            continue
+        seen.add(key)
+        alerts.append({"index": int(i), "src_ip": str(r["src_ip"]),
+                       "score": float(r["n_failed"]), "severity": severity(r),
+                       "top_features": [["n_failed", float(r["n_failed"])],
+                                        ["n_distinct_users", float(r["n_distinct_users"])],
+                                        ["n_accepted", float(r["n_accepted"])]]})
+    if not alerts:
+        return 0
+    ids = db.insert_alerts(alerts, X, RULE_VERSION, src_ips=ips, path=db_path)
+    with db.connect(db_path) as con:   # horodatage affiché = minute de l'attaque, pas l'heure d'insertion
+        for a, alert_id in zip(alerts, ids):
+            ts = pd.Timestamp(feats.loc[a["index"], "minute"]).isoformat(timespec="seconds")
+            con.execute("UPDATE alerts SET created_at=? WHERE id=?", (ts, alert_id))
+    for a in alerts:
+        r = feats.loc[a["index"]]
+        print(f"ALERTE {a['severity'].upper():8} ip={r['src_ip']} minute={r['minute']} "
+              f"echecs={int(r['n_failed'])} comptes={int(r['n_distinct_users'])} acceptes={int(r['n_accepted'])}")
+    if notify_on:
+        import notify
+        print("Notification :", notify.notify(alerts, RULE_VERSION))
     return len(alerts)
 
 
@@ -70,15 +69,16 @@ if __name__ == "__main__":
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--follow", action="store_true")
     ap.add_argument("--since", default=None)
+    ap.add_argument("--min-failed", type=int, default=5)
+    ap.add_argument("--notify", action="store_true")
     a = ap.parse_args()
-    model, meta, mu, sd = load_detector()
-    since = pd.Timestamp(a.since) if a.since else (pd.Timestamp(datetime.now()) if a.follow else None)
+    since = pd.Timestamp(a.since) if a.since else (pd.Timestamp.now() if a.follow else None)
     seen = set()
-    print(f"Détecteur SSH {meta['version']} : seuil {meta['threshold']}, fenêtre {meta['window_seconds']} s, base {DB_SSH}")
+    print(f"Détecteur {RULE_VERSION} : seuil {a.min_failed} échecs/IP/minute, base {DB_SSH}")
     if a.once or not a.follow:
-        n = scan(a.log, model, meta, mu, sd, seen, since)
-        print(f"{n} alerte(s)")
+        print(f"{scan(a.log, a.min_failed, seen, since, a.notify)} alerte(s)")
     else:
         while True:
-            scan(a.log, model, meta, mu, sd, seen, since)
+            scan(a.log, a.min_failed, seen, since, a.notify)
             time.sleep(5)
+
