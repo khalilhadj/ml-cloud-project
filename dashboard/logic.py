@@ -187,9 +187,28 @@ def retrain_history(limit=20, path=None):
 
 
 def run_retrain_now(db_path=None, apply_config=True):
-    """Lance un cycle de réentraînement (même règle que le planificateur)."""
+    """Lance un cycle de réentraînement (même règle que le planificateur) et le trace dans l'historique."""
     import retrain
-    return retrain.run_cycle(load_config(), db_path=db_path, apply_config=apply_config)
+    import scheduler
+    from datetime import datetime, timezone
+    cfg = load_config()
+    rec = {"time": datetime.now(timezone.utc).isoformat(timespec="seconds"), "status": "error",
+           "old_version": None, "new_version": None, "n_feedback": None, "reason": None, "error": None}
+    try:
+        result = retrain.run_cycle(cfg, db_path=db_path, apply_config=apply_config)
+        rec.update(status=result.get("status", "unknown"), old_version=result.get("old_version"),
+                   new_version=result.get("new_version"), n_feedback=result.get("n_feedback"),
+                   reason=result.get("reason"))
+        return result
+    except Exception as e:
+        rec["error"] = str(e)
+        raise
+    finally:
+        if db_path is None:   # pas de trace pour les tests, qui utilisent une base temporaire
+            hist = scheduler.history_path(cfg)
+            hist.parent.mkdir(parents=True, exist_ok=True)
+            with open(hist, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 
 def to_csv(rows):
