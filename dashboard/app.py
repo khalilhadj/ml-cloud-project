@@ -1,27 +1,36 @@
 """Tableau de bord analyste. Lancer : streamlit run dashboard/app.py"""
+import hmac
+import os
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import streamlit as st
+from dotenv import load_dotenv
 
 import logic
 
 st.set_page_config(page_title="Détection d'anomalies", page_icon="🛡️", layout="wide")
 
-import hmac
-import os
+# Charge .env à la racine du projet (en Docker, les variables viennent déjà de env_file)
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+_pwd = os.environ.get("DASHBOARD_PASSWORD", "").strip()
 
-_pwd = os.environ.get("DASHBOARD_PASSWORD", "")
-if _pwd:
-    if not st.session_state.get("auth"):
-        st.title("🛡️ Accès réservé")
-        entered = st.text_input("Mot de passe", type="password")
-        if entered:
-            if hmac.compare_digest(entered.encode(), _pwd.encode()):
-                st.session_state["auth"] = True
-                st.rerun()
-            else:
-                st.error("Mot de passe incorrect.")
-        st.stop()
+# Fermé par défaut : sans mot de passe configuré, rien ne s'affiche
+if not _pwd:
+    st.error("Accès bloqué : DASHBOARD_PASSWORD n'est pas configuré.")
+    st.stop()
+
+if not st.session_state.get("auth"):
+    st.title("🛡️ Accès réservé")
+    entered = st.text_input("Mot de passe", type="password")
+    if entered:
+        if hmac.compare_digest(entered.encode(), _pwd.encode()):
+            st.session_state["auth"] = True
+            st.rerun()
+        else:
+            st.error("Mot de passe incorrect.")
+    st.stop()
 
 # ------------------------------------------------------------------ barre latérale
 st.sidebar.header("Analyste")
@@ -47,7 +56,7 @@ status = logic.status_counts()
 total = sum(status.values())
 
 tabs = st.tabs(["Vue d'ensemble", "Alertes", "Feedback et réentraînement",
-                "Modèle et cloud", "Démo et administration"])
+                "Modèle et cloud", "Démo et administration", "Alertes SSH"])
 
 # ------------------------------------------------------------------ 1. vue d'ensemble
 with tabs[0]:
@@ -211,3 +220,51 @@ with tabs[4]:
     if st.button("Vider la base", disabled=not sure):
         st.success(f"{logic.reset_db()} alerte(s) supprimée(s).")
         st.rerun()
+
+
+
+# ------------------------------------------------------------------ 6. alertes SSH (détecteur par règle)
+with tabs[5]:
+    import json as _json
+    DB_SSH = logic.ROOT / "data" / "alerts_ssh.db"   # base séparée : jamais utilisée par le réentraînement NSL-KDD
+    st.subheader("Alertes de force brute SSH")
+    st.caption("Règle : au moins 5 échecs par IP et par minute. "
+               "L'heure affichée est la minute de l'attaque relevée dans auth.log. "
+               "Base séparée : ces alertes n'entrent pas dans le réentraînement NSL-KDD.")
+    if not DB_SSH.exists():
+        st.info("Aucune alerte SSH. Lancer : python app-ml/detector.py --once --log <auth.log>")
+    else:
+        with logic.db.connect(DB_SSH) as con:
+            raw = [dict(r) for r in con.execute(
+                "SELECT id, created_at, severity, src_ip, status, top_features, model_version "
+                "FROM alerts ORDER BY id DESC").fetchall()]
+        ssh_rows = []
+        for r in raw:
+            tf = dict(_json.loads(r["top_features"]))
+            ssh_rows.append({
+                "id": r["id"], "minute de l'attaque": r["created_at"], "sévérité": r["severity"],
+                "ip": r["src_ip"] or "-", "échecs": int(tf.get("n_failed", 0)),
+                "comptes testés": int(tf.get("n_distinct_users", 0)),
+                "accès obtenus": int(tf.get("n_accepted", 0)),
+                "statut": r["status"], "règle": r["model_version"]})
+        c = st.columns(4)
+        c[0].metric("Alertes SSH", len(ssh_rows))
+        c[1].metric("En attente", sum(r["statut"] == "en_attente" for r in ssh_rows))
+        c[2].metric("Vrais positifs", sum(r["statut"] == "vrai_positif" for r in ssh_rows))
+        c[3].metric("Faux positifs", sum(r["statut"] == "faux_positif" for r in ssh_rows))
+        if ssh_rows:
+            st.dataframe(pd.DataFrame(ssh_rows), hide_index=True, width="stretch")
+            st.subheader("Qualifier une alerte SSH")
+            q1, q2 = st.columns([1, 3])
+            sid = q1.selectbox("Alerte n°", [r["id"] for r in ssh_rows], key="ssh_id")
+            scomment = q2.text_input("Commentaire (facultatif)", key="ssh_comment")
+            b1, b2, _ = st.columns([1, 1, 4])
+            for col, label, verdict in ((b1, "Vrai positif", "vrai_positif"),
+                                        (b2, "Faux positif", "faux_positif")):
+                if col.button(label, key=f"ssh_{verdict}"):
+                    if not analyst.strip():
+                        st.error("Renseigne ton nom dans la barre latérale.")
+                    else:
+                        logic.qualify(int(sid), verdict, analyst, scomment, db_path=DB_SSH)
+                        st.success(f"Alerte {sid} qualifiée : {label.lower()}")
+                        st.rerun()
