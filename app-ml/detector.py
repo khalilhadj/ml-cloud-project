@@ -15,6 +15,7 @@ from features_logs import build_auth_features, load_auth_attempts  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 DB_SSH = ROOT / "data" / "alerts_ssh.db"   # base séparée : ne pas mélanger avec les 77 variables NSL-KDD
 RULE_VERSION = "ssh-rule-v1"
+FMT = "%Y-%m-%d %H:%M:%S"
 
 
 def severity(r):
@@ -22,7 +23,14 @@ def severity(r):
         return "élevée"            # accès obtenu après échecs : compromission probable
     if r["n_distinct_users"] >= 2:
         return "élevée" if r["n_failed"] >= 20 else "moyenne"
-    return "faible"
+    return "moyenne" if r["n_failed"] >= 20 else "faible"   # un seul compte mais gros volume
+
+
+def load_seen(db_path=DB_SSH):
+    """Clés (ip, minute) déjà en base : évite de réinsérer après un redémarrage."""
+    with db.connect(db_path) as con:
+        rows = con.execute("SELECT src_ip, created_at FROM alerts").fetchall()
+    return {(str(r[0]), str(r[1]).replace("T", " ")) for r in rows}
 
 
 def scan(log_path, min_failed, seen, since=None, notify_on=False, db_path=DB_SSH):
@@ -35,13 +43,13 @@ def scan(log_path, min_failed, seen, since=None, notify_on=False, db_path=DB_SSH
     ips = feats["src_ip"].astype(str).tolist()
     alerts = []
     for i, r in feats.iterrows():
-        key = (r["src_ip"], str(r["minute"]))
+        key = (str(r["src_ip"]), pd.Timestamp(r["minute"]).strftime(FMT))
         if r["n_failed"] < min_failed or key in seen:
             continue
         if since is not None and pd.Timestamp(r["minute"]) < since:
             continue
         seen.add(key)
-        alerts.append({"index": int(i), "src_ip": str(r["src_ip"]),
+        alerts.append({"index": int(i), "src_ip": str(r["src_ip"]), "minute": key[1],
                        "score": float(r["n_failed"]), "severity": severity(r),
                        "top_features": [["n_failed", float(r["n_failed"])],
                                         ["n_distinct_users", float(r["n_distinct_users"])],
@@ -51,7 +59,7 @@ def scan(log_path, min_failed, seen, since=None, notify_on=False, db_path=DB_SSH
     ids = db.insert_alerts(alerts, X, RULE_VERSION, src_ips=ips, path=db_path)
     with db.connect(db_path) as con:   # horodatage affiché = minute de l'attaque, pas l'heure d'insertion
         for a, alert_id in zip(alerts, ids):
-            ts = pd.Timestamp(feats.loc[a["index"], "minute"]).isoformat(timespec="seconds")
+            ts = pd.Timestamp(feats.loc[a["index"], "minute"]).strftime(FMT)
             con.execute("UPDATE alerts SET created_at=? WHERE id=?", (ts, alert_id))
     for a in alerts:
         r = feats.loc[a["index"]]
@@ -73,7 +81,7 @@ if __name__ == "__main__":
     ap.add_argument("--notify", action="store_true")
     a = ap.parse_args()
     since = pd.Timestamp(a.since) if a.since else (pd.Timestamp.now() if a.follow else None)
-    seen = set()
+    seen = load_seen()
     print(f"Détecteur {RULE_VERSION} : seuil {a.min_failed} échecs/IP/minute, base {DB_SSH}")
     if a.once or not a.follow:
         print(f"{scan(a.log, a.min_failed, seen, since, a.notify)} alerte(s)")
@@ -81,4 +89,3 @@ if __name__ == "__main__":
         while True:
             scan(a.log, a.min_failed, seen, since, a.notify)
             time.sleep(5)
-

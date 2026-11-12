@@ -1,4 +1,4 @@
-"""Notification des alertes : email SMTP, webhook Slack, ou simulation (FR-13)."""
+"""Notification des alertes : email SMTP, webhook Slack, SNS, ou simulation (FR-13)."""
 import json
 import logging
 import os
@@ -12,6 +12,8 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parents[1]
 logger = logging.getLogger(__name__)
 RANK = {"élevée": 2, "moyenne": 1, "faible": 0}
+# Détecteur par règle (SSH) : valeurs = comptes bruts, pas des écarts-types
+RAW_LABELS = {"n_failed": "échecs", "n_distinct_users": "comptes", "n_accepted": "accès acceptés"}
 
 
 def load_settings():
@@ -28,8 +30,15 @@ def load_settings():
     }
 
 
+def _format_features(a, is_rule):
+    if is_rule:
+        return ", ".join(f"{RAW_LABELS.get(n, n)}={int(d)}" for n, d in a["top_features"])
+    return ", ".join(f"{n} ({d} σ)" for n, d in a["top_features"])
+
+
 def build_message(alerts, model_version, top=10):
     """Texte récapitulatif : compteurs par sévérité + les alertes les plus graves."""
+    is_rule = str(model_version).startswith("ssh-rule")
     counts = {s: sum(a["severity"] == s for a in alerts) for s in RANK}
     ranked = sorted(alerts, key=lambda a: (RANK[a["severity"]], a["score"]), reverse=True)[:top]
     subject = (f"[Détection d'anomalies] {len(alerts)} alerte(s) - "
@@ -39,10 +48,11 @@ def build_message(alerts, model_version, top=10):
              f"moyenne {counts['moyenne']}, faible {counts['faible']})", "",
              f"Les {len(ranked)} plus graves :"]
     for a in ranked:
-        feats = ", ".join(f"{n} ({d} σ)" for n, d in a["top_features"])
+        feats = _format_features(a, is_rule)
         ip = f" ip={a['src_ip']}" if a.get("src_ip") else ""
+        minute = f" minute={a['minute']}" if a.get("minute") else ""
         n = f" x{a['count']}" if a.get("count", 1) > 1 else ""
-        lines.append(f"- {a['severity']:<7} score={a['score']:.3f}{ip}{n} : {feats}")
+        lines.append(f"- {a['severity']:<7} score={a['score']:.3f}{ip}{minute}{n} : {feats}")
     lines += ["", "Qualifier ces alertes dans le tableau de bord (vrai / faux positif)."]
     return subject, "\n".join(lines)
 
@@ -114,6 +124,9 @@ if __name__ == "__main__":
         {"index": 2, "score": 0.52, "severity": "faible", "top_features": [("src_bytes", 3.4)]},
         {"index": 3, "score": 0.58, "severity": "moyenne", "top_features": [("serror_rate", 5.0)]},
     ]
+    ssh = [{"index": 0, "score": 6.0, "severity": "élevée", "src_ip": "10.0.0.9",
+            "minute": "2026-11-10 15:19:00",
+            "top_features": [["n_failed", 6.0], ["n_distinct_users", 1.0], ["n_accepted", 1.0]]}]
     empty = {"host": "", "port": 587, "user": "", "password": "", "to": "", "slack": ""}
     smtp_cfg = {**empty, "host": "smtp.test", "to": "analyste@test", "user": "u", "password": "p"}
 
@@ -124,6 +137,9 @@ if __name__ == "__main__":
     check("la plus grave est listée en premier", body.index("score=0.710") < body.index("score=0.580") < body.index("score=0.520"))
     check("IP et regroupement affichés", "ip=10.0.0.5 x50" in body)
     check("variables déviantes affichées", "num_failed_logins (9.1 σ)" in body)
+    _, body_ssh = build_message(ssh, "ssh-rule-v1")
+    check("SSH : comptes bruts, pas de σ", "échecs=6" in body_ssh and "σ" not in body_ssh, body_ssh.splitlines()[-3])
+    check("SSH : minute de l'attaque affichée", "minute=2026-11-10 15:19:00" in body_ssh)
     with mock.patch("smtplib.SMTP") as m:
         check("SMTP configuré -> email", notify(demo, "v002", smtp_cfg) == "email")
         check("starttls + login + envoi appelés",
