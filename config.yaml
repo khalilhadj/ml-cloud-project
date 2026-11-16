@@ -15,11 +15,12 @@ model:
   max_samples: 1024
 
 detection:
-  threshold: 0.481472          # réglé à l'étape 5 sur le jeu de validation
+  threshold: 0.473067          # réglé à l'étape 5 sur le jeu de validation
+  target_fpr: 0.03             # FPR visé sur les normaux de validation
   severity:
-    low: 0.481472
-    medium: 0.538236
-    high: 0.595000
+    low: 0.473067
+    medium: 0.532624
+    high: 0.592182
   dedup_window_minutes: 10
 
 retrain:

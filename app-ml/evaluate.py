@@ -21,6 +21,13 @@ def best_threshold(y_true, scores):
     return float(thr[i]), float(f1[i])
 
 
+def threshold_at_fpr(y_true, scores, target_fpr):
+    """Seuil = quantile (1 - target_fpr) des scores NORMAUX de la validation.
+    Le FPR visé ne dépend plus du modèle (comparaison équitable entre versions)."""
+    normal = scores[np.asarray(y_true) == 0]
+    return float(np.quantile(normal, 1.0 - target_fpr))
+
+
 def metrics_at(y_true, scores, threshold):
     y_pred = (scores >= threshold).astype(int)
     tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
@@ -55,8 +62,13 @@ def main():
     s_val = score_matrix(model, data["X_val"])
     s_test = score_matrix(model, data["X_test"])
 
-    thr, f1_val_best = best_threshold(data["y_val"], s_val)
+    target = cfg["detection"].get("target_fpr")
+    if target:
+        thr = threshold_at_fpr(data["y_val"], s_val, target)
+    else:
+        thr, _ = best_threshold(data["y_val"], s_val)
     m_val = metrics_at(data["y_val"], s_val, thr)
+    f1_val_best = m_val["f1"]
     m_test = metrics_at(data["y_test"], s_test, thr)
 
     print(f"Modèle évalué : {meta['version']}")
@@ -66,6 +78,9 @@ def main():
     print(f"ACC-3 (F1 test >= 0,80) : {'OK' if m_test['f1'] >= 0.80 else 'NON ATTEINT'}")
 
     write_threshold(thr)                                            # FR-11, UC-4
+    from alerts import calibrate_severity, write_severity
+    med, high = calibrate_severity(s_val, thr)
+    write_severity(med, high, thr)
     meta["metrics"] = {"threshold": round(thr, 6), "validation": m_val, "test": m_test}
     with open(vdir / "metadata.json", "w", encoding="utf-8") as f:   # FR-08
         json.dump(meta, f, indent=2, ensure_ascii=False)

@@ -9,22 +9,26 @@ import numpy as np
 
 sys.path.append(str(Path(__file__).resolve().parent))
 import db  # noqa: E402
-from evaluate import best_threshold, metrics_at, write_threshold  # noqa: E402
+from evaluate import best_threshold, metrics_at, threshold_at_fpr, write_threshold  # noqa: E402
 from score import ROOT, load_config, load_version, score_matrix  # noqa: E402
 from train import save_version, train_model  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
 
-def decide(old, new):
-    """FR-20 : F1 au moins égal ET taux de faux positifs strictement inférieur."""
+def decide(old, new, fixed_fpr=False, fpr_tol=0.002):
+    """FR-20. Mode historique : F1 >= et FPR strictement inférieur.
+    Mode FPR cible : le FPR est fixé par construction, donc F1 >= et FPR <= ancien + tolérance."""
+    if fixed_fpr:
+        return (new["f1"] >= old["f1"]
+                and new["false_positive_rate"] <= old["false_positive_rate"] + fpr_tol)
     return new["f1"] >= old["f1"] and new["false_positive_rate"] < old["false_positive_rate"]
 
 
-def validation_metrics(model, X_val, y_val):
-    """Métriques sur la validation au seuil optimal du modèle."""
+def validation_metrics(model, X_val, y_val, target_fpr=None):
+    """Métriques sur la validation : seuil par FPR cible si défini, sinon F1 maximal."""
     s = score_matrix(model, X_val)
-    thr, _ = best_threshold(y_val, s)
+    thr = threshold_at_fpr(y_val, s, target_fpr) if target_fpr else best_threshold(y_val, s)[0]
     m = metrics_at(y_val, s, thr)
     m["threshold"] = round(thr, 6)
     return m
@@ -52,9 +56,10 @@ def run_cycle(cfg=None, db_path=None, apply_config=True):
     new_dir = save_version(new_model, pre, cfg, X_new, extra={
         "retrained": True, "parent_version": old_meta["version"], "feedback_samples": len(fps)})
 
-    old_m = validation_metrics(old_model, X_val, y_val)
-    new_m = validation_metrics(new_model, X_val, y_val)
-    promoted = decide(old_m, new_m)
+    target = cfg["detection"].get("target_fpr")
+    old_m = validation_metrics(old_model, X_val, y_val, target)
+    new_m = validation_metrics(new_model, X_val, y_val, target)
+    promoted = decide(old_m, new_m, fixed_fpr=bool(target))
 
     meta = json.loads((new_dir / "metadata.json").read_text(encoding="utf-8"))
     meta["metrics"] = {"threshold": new_m["threshold"], "validation": new_m}
